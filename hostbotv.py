@@ -2,262 +2,551 @@
 import telebot
 import os
 import subprocess
-import logging
-from flask import Flask, render_template
 import threading
 import time
+import logging
+from flask import Flask
 
-# --- CONFIGURATION ---
-BOT_TOKEN = "8345947714:AAENEX0AOb0_fOD9kd3GJjpDSECNytmVe8c"  # Replace with your bot's token
-ADMIN_USER_ID = 2052400282  # Replace with your Telegram user ID (admin)
-UPLOAD_FOLDER = "uploaded_files"
-LOG_FILE = "bot_logs.txt"
-HOST = "0.0.0.0"  # Listen on all interfaces
-PORT = 5000  # Choose a suitable port
+app = Flask(__name__)
 
-# --- SETUP ---
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+@app.route('/')
+def home():
+    return "<h1>Bit Live ✅</h1>"
 
-# --- LOGGING ---
+if __name__ == '__main__':
+    app.run(debug=True)
+    
+    
+# --- Bot Configuration ---
+BOT_TOKEN = "8345947714:AAENEX0AOb0_fOD9kd3GJjpDSECNytmVe8c"  # Replace with your actual bot token
+UPLOAD_FOLDER = "uploads"  # Directory to store uploaded files
+LOG_FILE = "bot.log"  # Log file name
+ADMIN_IDS = [2052400282]  # Replace with your Telegram User ID (or a list of IDs)
+
+
+# --- Configure Logging ---
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- TELEBOT ---
+# --- Initialize Bot ---
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# --- FLASK ---
-app = Flask(__name__)
+# --- Create Uploads Folder if it doesn't exist ---
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
 
-# --- GLOBALS ---
-running_processes = {} # Store running processes with their IDs
+# --- Global Variables ---
+running_processes = {}  # Dictionary to store running processes (filename: process)
 
-# --- HELPER FUNCTIONS ---
+
+# --- Helper Functions ---
 
 def is_admin(user_id):
-    return user_id == ADMIN_USER_ID
+    """Checks if a user is an admin."""
+    return user_id in ADMIN_IDS
 
-def run_command(command, timeout=60):  # Added timeout
-    try:
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        running_processes[process.pid] = process
-        stdout, stderr = process.communicate(timeout=timeout) # Added timeout
-        del running_processes[process.pid]
-        return process.returncode, stdout, stderr
-    except subprocess.TimeoutExpired:
-        process.kill()
-        return 1, "", "Timeout expired after 60 seconds."
-    except Exception as e:
-        return 1, "", str(e)
+def format_file_size(size_bytes):
+    """Formats file size in a human-readable format."""
+    if size_bytes < 1024:
+        return f"{size_bytes} bytes"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.2f} KB"
+    elif size_bytes < 1024 * 1024 * 1024:
+        return f"{size_bytes / (1024 * 1024):.2f} MB"
+    else:
+        return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
 
-def list_files():
-    files = [f for f in os.listdir(UPLOAD_FOLDER) if os.path.isfile(os.path.join(UPLOAD_FOLDER, f))]
+
+def get_file_list():
+    """Returns a list of files in the uploads folder with their sizes."""
+    files = []
+    for filename in os.listdir(UPLOAD_FOLDER):
+        filepath = os.path.join(UPLOAD_FOLDER, filename)
+        if os.path.isfile(filepath):
+            files.append((filename, os.path.getsize(filepath)))
     return files
 
-def get_file_path(filename):
-    return os.path.join(UPLOAD_FOLDER, filename)
 
-# --- TELEBOT HANDLERS ---
+def run_python_script(filename, chat_id):
+    """Runs a Python script in a separate thread and sends output to the bot."""
+    global running_processes
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+    try:
+        process = subprocess.Popen(['python', filepath],
+                                   stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE,
+                                   text=True)  # Capture output as text
+
+        running_processes[filename] = process
+
+        while True:
+            output = process.stdout.readline()
+            error = process.stderr.readline()
+
+            if output:
+                bot.send_message(chat_id, f"📜 Output from {filename}:\n`{output.strip()}`", parse_mode="Markdown")
+                logging.info(f"Script {filename} output: {output.strip()}")
+            if error:
+                bot.send_message(chat_id, f"🚨 Error from {filename}:\n`{error.strip()}`", parse_mode="Markdown")
+                logging.error(f"Script {filename} error: {error.strip()}")
+
+            return_code = process.poll()
+            if return_code is not None:
+                del running_processes[filename]
+                if return_code == 0:
+                    bot.send_message(chat_id, f"✅ Script `{filename}` finished successfully.", parse_mode="Markdown")
+                    logging.info(f"Script {filename} finished successfully.")
+                else:
+                    bot.send_message(chat_id, f"❌ Script `{filename}` finished with an error (return code: {return_code}).", parse_mode="Markdown")
+                    logging.error(f"Script {filename} finished with error (return code: {return_code}).")
+                break
+
+            time.sleep(0.1)  # Avoid busy-waiting
+
+    except FileNotFoundError:
+        bot.send_message(chat_id, f"❌ File `{filename}` not found.", parse_mode="Markdown")
+        logging.error(f"File {filename} not found.")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ An error occurred while running `{filename}`: `{str(e)}`", parse_mode="Markdown")
+        logging.exception(f"Error running script {filename}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error running script `{filename}` in chat {chat_id}:\n`{str(e)}`", parse_mode="Markdown")
+
+
+def install_package(package_name, chat_id):
+    """Installs a Python package using pip."""
+    try:
+        bot.send_message(chat_id, f"⏳ Installing package `{package_name}`...", parse_mode="Markdown")
+        process = subprocess.run(['pip', 'install', package_name, '-U'],
+                                   capture_output=True, text=True)  # Capture output
+
+        if process.returncode == 0:
+            bot.send_message(chat_id, f"✅ Package `{package_name}` installed successfully.", parse_mode="Markdown")
+            logging.info(f"Package {package_name} installed successfully.")
+        else:
+            bot.send_message(chat_id, f"❌ Error installing package `{package_name}`:\n`{process.stderr}`", parse_mode="Markdown")
+            logging.error(f"Error installing package {package_name}: {process.stderr}")
+            # Notify Admin about Error
+            for admin_id in ADMIN_IDS:
+                bot.send_message(admin_id, f"🚨 Error installing package `{package_name}` in chat {chat_id}:\n`{process.stderr}`", parse_mode="Markdown")
+
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ An error occurred while installing `{package_name}`: `{str(e)}`", parse_mode="Markdown")
+        logging.exception(f"Error installing package {package_name}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error installing package `{package_name}` in chat {chat_id}:\n`{str(e)}`", parse_mode="Markdown")
+
+# --- Command Handlers ---
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    """Handles the /start command."""
     user_id = message.from_user.id
-    if is_admin(user_id):
-        bot.reply_to(message, "👋 Welcome, Admin! You have control. Use /help for commands.")
-    else:
-        bot.reply_to(message, "🚫 Unauthorized access.")
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    item1 = telebot.types.KeyboardButton("📁 List Files")
+    item2 = telebot.types.KeyboardButton("⚙️ Manage Files")
+    item3 = telebot.types.KeyboardButton("🚀 Run Script")
+    item4 = telebot.types.KeyboardButton("📦 Install Package")
+    item5 = telebot.types.KeyboardButton("ℹ️ Help")
+    markup.add(item1, item2, item3, item4, item5)
+
+    bot.send_message(message.chat.id,
+                     "👋 Hello! I'm your Python Hosting Bot.  I can run your Python scripts.\n\n"
+                     "Use the buttons below or the following commands:\n"
+                     "/list - List uploaded files\n"
+                     "/run [filename] - Run a Python script\n"
+                     "/install [package] - Install a Python package\n"
+                     "/help - Show available commands\n"
+                     "/manage -  Manage your uploaded files\n"
+                     "/logs - Get the bot logs (Admin only)\n" # ADDED: Logs command
+                     "Just send me a Python file to upload it! 📤",
+                     reply_markup=markup)
+    logging.info(f"User {message.from_user.id} started the bot.")
+
 
 @bot.message_handler(commands=['help'])
-def help_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+def help(message):
+    """Handles the /help command."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
 
     help_text = """
-    🤖 Bot Commands:
-    /start - Start the bot
-    /help - Show this help message
-    /upload - Upload a Python file (attach file to message)
-    /listfiles - List uploaded files
-    /run <filename> - Run a Python file
-    /install <package> - Install a Python package using pip
-    /logs - Get the bot's log file
-    /stop <process_id> - Stop a running process
-    /status - Check if the bot is running (via web)
-    """
-    bot.reply_to(message, help_text)
+Here are the available commands:
 
-@bot.message_handler(commands=['listfiles'])
-def list_files_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+/start - Start the bot and show the main menu.
+/list - List all uploaded Python files.
+/run [filename] - Run a Python script (e.g., `/run my_script.py`).
+/install [package] - Install a Python package using pip (e.g., `/install requests`).
+/help - Show this help message.
+/manage - Manage your uploaded files(Delete ,Show Size).
+/logs - Get the bot logs (Admin only). # ADDED: Logs command
+
+You can also upload Python files directly by sending them to the bot. 📤
+"""
+    bot.send_message(message.chat.id, help_text)
+    logging.info(f"User {message.from_user.id} requested help.")
+
+@bot.message_handler(commands=['manage'])
+def manage_files(message):
+    """Handles the /manage command."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
 
-    files = list_files()
-    if files:
-        file_list = "\n".join(files)
-        bot.reply_to(message, f"📁 Uploaded files:\n{file_list}")
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    item1 = telebot.types.KeyboardButton("🗑️ Delete File")
+    item2 = telebot.types.KeyboardButton("📊 Show File Size")
+    item3 = telebot.types.KeyboardButton("Back to Main Menu")  # Back button
+    markup.add(item1, item2, item3)
+
+    bot.send_message(message.chat.id, "📁 File Management Options:", reply_markup=markup)
+    logging.info(f"User {message.from_user.id} entered file management.")
+
+@bot.message_handler(func=lambda message: message.text == "🗑️ Delete File")
+def delete_file_selection(message):
+    """Handles the "Delete File" option."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    files = get_file_list()
+    if not files:
+        bot.send_message(message.chat.id, "No files to delete.")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for filename, _ in files:
+        markup.add(telebot.types.KeyboardButton(f"Delete: {filename}"))
+    markup.add(telebot.types.KeyboardButton("Cancel"))
+    bot.send_message(message.chat.id, "Choose a file to delete:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text.startswith("Delete: "))
+def delete_file(message):
+    """Deletes the selected file."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    filename = message.text[len("Delete: "):]
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+    if os.path.exists(filepath):
+        try:
+            os.remove(filepath)
+            bot.send_message(message.chat.id, f"✅ File `{filename}` deleted successfully.", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+            logging.info(f"File {filename} deleted by user {message.from_user.id}.")
+        except Exception as e:
+            bot.send_message(message.chat.id, f"❌ Error deleting file `{filename}`: `{str(e)}`", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+            logging.error(f"Error deleting file {filename} by user {message.from_user.id}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error deleting file `{filename}` in chat {message.chat.id}:\n`{str(e)}`", parse_mode="Markdown")
+
     else:
-        bot.reply_to(message, "📂 No files uploaded yet.")
+        bot.send_message(message.chat.id, f"❌ File `{filename}` not found.", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+
+
+@bot.message_handler(func=lambda message: message.text == "📊 Show File Size")
+def show_file_size_selection(message):
+    """Handles the "Show File Size" option."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    files = get_file_list()
+    if not files:
+        bot.send_message(message.chat.id, "No files uploaded yet.")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for filename, _ in files:
+        markup.add(telebot.types.KeyboardButton(f"Size: {filename}"))
+    markup.add(telebot.types.KeyboardButton("Cancel"))  # Added Cancel button
+    bot.send_message(message.chat.id, "Choose a file to show its size:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text.startswith("Size: "))
+def show_file_size(message):
+    """Shows the size of the selected file."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    filename = message.text[len("Size: "):]
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+
+    if os.path.exists(filepath):
+        file_size = os.path.getsize(filepath)
+        formatted_size = format_file_size(file_size)
+        bot.send_message(message.chat.id, f"📏 File `{filename}` size: `{formatted_size}`", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+        logging.info(f"File size of {filename} shown to user {message.from_user.id}.")
+    else:
+        bot.send_message(message.chat.id, f"❌ File `{filename}` not found.", parse_mode="Markdown", reply_markup=get_main_menu_markup())
+
+@bot.message_handler(commands=['list'])
+def list_files(message):
+    """Handles the /list command."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    files = get_file_list()
+
+    if not files:
+        bot.send_message(message.chat.id, "No files uploaded yet.")
+        return
+
+    file_list_text = "Uploaded files:\n"
+    for filename, file_size in files:
+        formatted_size = format_file_size(file_size)
+        file_list_text += f"- `{filename}` ({formatted_size})\n"
+
+    bot.send_message(message.chat.id, file_list_text, parse_mode="Markdown")
+    logging.info(f"User {message.from_user.id} listed files.")
+
 
 @bot.message_handler(commands=['run'])
-def run_file_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+def run_script_command(message):
+    """Handles the /run command."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
-
     try:
-        filename = message.text.split(" ", 1)[1].strip()
-        file_path = get_file_path(filename)
-
-        if not os.path.exists(file_path):
-            bot.reply_to(message, f"❌ File '{filename}' not found.")
+        filename = message.text.split(' ', 1)[1].strip()
+        if not filename.endswith(".py"):
+            bot.send_message(message.chat.id, "❌ Please provide a Python file name ending with `.py`.")
             return
-
-        # Run the file
-        command = f"python3 {file_path}"
-        bot.reply_to(message, f"🚀 Running '{filename}'...")
-        returncode, stdout, stderr = run_command(command)
-
-        if returncode == 0:
-            bot.reply_to(message, f"✅ '{filename}' executed successfully.\n\nOutput:\n{stdout}")
-            logging.info(f"File '{filename}' ran successfully. Output: {stdout}")
-        else:
-            error_message = f"❌ '{filename}' failed with error:\n{stderr}"
-            bot.reply_to(message, error_message)
-            bot.send_message(ADMIN_USER_ID, f"🚨 Error running '{filename}':\n{stderr}")  # Notify admin
-            logging.error(f"File '{filename}' failed. Error: {stderr}")
+        run_script(message, filename)  # Call the common run_script function
 
     except IndexError:
-        bot.reply_to(message, "⚠️ Please specify a filename to run. Example: /run my_script.py")
+        bot.send_message(message.chat.id, "❌ Please provide a filename to run (e.g., `/run my_script.py`).")
     except Exception as e:
-        bot.reply_to(message, f"❌ An unexpected error occurred: {e}")
-        logging.exception("Error running file.")
-
-@bot.message_handler(commands=['stop'])
-def stop_process_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
-        return
-
-    try:
-        process_id = int(message.text.split(" ", 1)[1].strip())
-        if process_id in running_processes:
-            process = running_processes[process_id]
-            process.terminate()  # Or process.kill()
-            del running_processes[process_id]
-            bot.reply_to(message, f"🛑 Process {process_id} stopped.")
-        else:
-            bot.reply_to(message, f"❌ Process {process_id} not found.")
-
-    except (IndexError, ValueError):
-        bot.reply_to(message, "⚠️ Please specify a process ID to stop. Example: /stop 1234")
-    except Exception as e:
-        bot.reply_to(message, f"❌ An unexpected error occurred: {e}")
-        logging.exception("Error stopping process.")
+        bot.send_message(message.chat.id, f"❌ An unexpected error occurred: `{str(e)}`", parse_mode="Markdown")
+        logging.exception(f"Error in /run command by user {message.from_user.id}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error running script from command by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
 
 @bot.message_handler(commands=['install'])
 def install_package_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+    """Handles the /install command."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
 
     try:
-        package_name = message.text.split(" ", 1)[1].strip()
-        bot.reply_to(message, f"⏳ Installing '{package_name}'...")
-
-        command = f"pip install {package_name} -U" #added -U to avoid dependency problems
-        returncode, stdout, stderr = run_command(command)
-
-        if returncode == 0:
-            bot.reply_to(message, f"✅ '{package_name}' installed successfully.\n\nOutput:\n{stdout}")
-            logging.info(f"Package '{package_name}' installed successfully. Output: {stdout}")
-        else:
-            error_message = f"❌ Failed to install '{package_name}':\n{stderr}"
-            bot.reply_to(message, error_message)
-            bot.send_message(ADMIN_USER_ID, f"🚨 Error installing '{package_name}':\n{stderr}") #Notify Admin
-            logging.error(f"Failed to install '{package_name}'. Error: {stderr}")
-
+        package_name = message.text.split(' ', 1)[1].strip()
+        install_package(package_name, message.chat.id)
     except IndexError:
-        bot.reply_to(message, "⚠️ Please specify a package to install. Example: /install requests")
+        bot.send_message(message.chat.id, "❌ Please provide a package name to install (e.g., `/install requests`).")
     except Exception as e:
-        bot.reply_to(message, f"❌ An unexpected error occurred: {e}")
-        logging.exception("Error installing package.")
+        bot.send_message(message.chat.id, f"❌ An unexpected error occurred: `{str(e)}`", parse_mode="Markdown")
+        logging.exception(f"Error in /install command by user {message.from_user.id}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error installing package from command by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
 
-
-@bot.message_handler(commands=['logs'])
-def get_logs_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
-        return
-
-    try:
-        with open(LOG_FILE, "r") as f:
-            logs = f.read()
-        bot.send_document(message.chat.id, open(LOG_FILE, 'rb'), caption="📜 Bot Logs")  # Send as document
-    except FileNotFoundError:
-        bot.reply_to(message, "⚠️ Log file not found.")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Error getting logs: {e}")
-        logging.exception("Error getting logs.")
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+    """Handles document uploads (specifically Python files)."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
 
     try:
-        file_info = bot.get_file(message.document.file_id)
-        downloaded_file = bot.download_file(file_info.file_path)
-        filename = message.document.file_name
+        if message.document.file_name.endswith('.py'):
+            file_info = bot.get_file(message.document.file_id)
+            downloaded_file = bot.download_file(file_info.file_path)
+            filename = message.document.file_name
+            filepath = os.path.join(UPLOAD_FOLDER, filename)
 
-        if not filename.endswith(".py"):
-            bot.reply_to(message, "⚠️ Only Python files (.py) are allowed.")
-            return
+            with open(filepath, 'wb') as new_file:
+                new_file.write(downloaded_file)
 
-        file_path = get_file_path(filename)
-
-        with open(file_path, 'wb') as new_file:
-            new_file.write(downloaded_file)
-
-        bot.reply_to(message, f"✅ File '{filename}' saved successfully.")
-        logging.info(f"File '{filename}' uploaded.")
+            bot.send_message(message.chat.id, f"✅ File `{filename}` saved successfully!", parse_mode="Markdown")
+            logging.info(f"File {filename} uploaded by user {message.from_user.id}.")
+        else:
+            bot.send_message(message.chat.id, "❌ Only Python files (.py) are allowed.")
 
     except Exception as e:
-        bot.reply_to(message, f"❌ Error saving file: {e}")
-        logging.exception("Error saving file.")
+        bot.send_message(message.chat.id, f"❌ An error occurred during file upload: `{str(e)}`", parse_mode="Markdown")
+        logging.exception(f"Error handling document upload by user {message.from_user.id}: {e}")
+        # Notify Admin about Error
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"🚨 Error handling document upload by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
 
 
-# --- FLASK ROUTES ---
+# --- Button Handlers (Refactored) ---
 
-@app.route("/")
-def index():
-    return render_template('index.html', bot_status="✅ Bot is Running Live")  # Use Jinja template
+def get_main_menu_markup():
+    """Helper function to create the main menu keyboard markup."""
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    item1 = telebot.types.KeyboardButton("📁 List Files")
+    item2 = telebot.types.KeyboardButton("⚙️ Manage Files")
+    item3 = telebot.types.KeyboardButton("🚀 Run Script")
+    item4 = telebot.types.KeyboardButton("📦 Install Package")
+    item5 = telebot.types.KeyboardButton("ℹ️ Help")
+    markup.add(item1, item2, item3, item4, item5)
+    return markup
 
-@app.route("/status")
-def status():
-    return "Bot is Running Live ✅"
-
-@bot.message_handler(commands=['status'])
-def status_command(message):
-    if not is_admin(message.from_user.id):
-        bot.reply_to(message, "🚫 Unauthorized access.")
+@bot.message_handler(func=lambda message: message.text == "Back to Main Menu" or message.text == "Cancel")
+def back_to_main_menu(message):
+    """Handles the "Back to Main Menu" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
         return
-    bot.reply_to(message, "Bot status can be viewed at the web interface.")
 
-# --- POLLING and WEB SERVER ---
-def start_flask():
-    app.run(host=HOST, port=PORT, debug=False, use_reloader=False) # Disable reloader for threading
+    bot.send_message(message.chat.id, "Returning to main menu.", reply_markup=get_main_menu_markup())
 
-def start_polling():
-    bot.infinity_polling()
+@bot.message_handler(func=lambda message: message.text == "📁 List Files")
+def list_files_button(message):
+    """Handles the "List Files" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
 
-if __name__ == "__main__":
-    # Start Flask in a separate thread
-    flask_thread = threading.Thread(target=start_flask)
-    flask_thread.daemon = True  # Daemonize thread so it exits when the main thread exits
-    flask_thread.start()
+    list_files(message)  # Call the existing list_files function
 
-    # Start Telegram bot polling in the main thread
-    start_polling()
+@bot.message_handler(func=lambda message: message.text == "⚙️ Manage Files")
+def manage_files_button(message):
+    """Handles the "Manage Files" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    manage_files(message)  # Call the existing manage_files function
+
+def run_script(message, filename):
+    """Runs a script (either from button or command)."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    filepath = os.path.join(UPLOAD_FOLDER, filename)
+    if not os.path.exists(filepath):
+        bot.send_message(message.chat.id, f"❌ File `{filename}` not found.", parse_mode="Markdown")
+        return
+
+    if filename in running_processes:
+        bot.send_message(message.chat.id, f"❌ Script `{filename}` is already running. Please wait for it to finish or stop it manually.")
+        return
+
+    bot.send_message(message.chat.id, f"⏳ Running script `{filename}`...", parse_mode="Markdown")
+    threading.Thread(target=run_python_script, args=(filename, message.chat.id)).start()
+    logging.info(f"Script {filename} started by user {message.from_user.id}.")
+
+@bot.message_handler(func=lambda message: message.text == "🚀 Run Script")
+def run_script_button(message):
+    """Handles the "Run Script" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    files = get_file_list()
+    if not files:
+        bot.send_message(message.chat.id, "No files to run. Upload a Python file first!")
+        return
+
+    markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
+    for filename, _ in files:
+        markup.add(telebot.types.KeyboardButton(filename))  # Use filenames as button text
+    markup.add(telebot.types.KeyboardButton("Cancel"))  # Added Cancel button
+    bot.send_message(message.chat.id, "Choose a script to run:", reply_markup=markup)
+
+@bot.message_handler(func=lambda message: message.text.endswith(".py"))
+def handle_script_selection(message):
+    """Handles the selection of a script from the Run Script menu."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    filename = message.text
+    run_script(message, filename)  # Call the common run_script function
+
+@bot.message_handler(func=lambda message: message.text == "📦 Install Package")
+def install_package_button(message):
+    """Handles the "Install Package" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    bot.send_message(message.chat.id, "Please enter the package name to install (e.g., `requests`):", reply_markup=telebot.types.ReplyKeyboardRemove())
+    bot.register_next_step_handler(message, process_package_name)
+
+def process_package_name(message):
+    """Gets the package name from the user and installs it."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    package_name = message.text.strip()
+    if package_name:
+        install_package(package_name, message.chat.id)
+    else:
+        bot.send_message(message.chat.id, "❌ Package name cannot be empty.", reply_markup=get_main_menu_markup())
+
+@bot.message_handler(func=lambda message: message.text == "ℹ️ Help")
+def help_button(message):
+    """Handles the "Help" button."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
+        return
+
+    help(message)  # Call the existing help function
+
+@bot.message_handler(commands=['logs'])
+def send_logs(message):
+    """Handles the /logs command (Admin only)."""
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        bot.reply_to(message, "Sorry, this command is only for admins.")
+        return
+
+    try:
+        with open(LOG_FILE, 'r') as f:
+            log_content = f.read()
+        bot.send_message(user_id, f"Bot Logs:\n\n{log_content}\n", parse_mode="Markdown")
+    logging.info(f"Admin {user_id} requested logs.")
+  except FileNotFoundError:
+    bot.send_message(user_id, "Log file not found.")
+    logging.warning(f"Admin {user_id} requested logs, but the file was not found.")
+  except Exception as e:
+    bot.send_message(user_id, f"An error occurred while sending logs: {str(e)}", parse_mode="Markdown")
+    logging.exception(f"Error sending logs to admin {user_id}: {e}")
+
+# --- Main Loop ---
+if __name__ == '__main__':
+  try:
+    logging.info("Bot started.")
+    bot.infinity_polling() # Use infinity_polling for better reconnection handling
+  except Exception as e:
+    logging.exception(f"Bot stopped due to an error: {e}")
+  finally:
+    logging.info("Bot stopped.")
