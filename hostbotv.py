@@ -11,18 +11,15 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "<h1>Bit Live ✅</h1>"
+    return "<h1> hosting Bot Live ✅</h1>"
 
 if __name__ == '__main__':
     app.run(debug=True)
-    
-    
+
 # --- Bot Configuration ---
 BOT_TOKEN = "8345947714:AAENEX0AOb0_fOD9kd3GJjpDSECNytmVe8c"  # Replace with your actual bot token
 UPLOAD_FOLDER = "uploads"  # Directory to store uploaded files
 LOG_FILE = "bot.log"  # Log file name
-ADMIN_IDS = [2052400282]  # Replace with your Telegram User ID (or a list of IDs)
-
 
 # --- Configure Logging ---
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
@@ -40,10 +37,6 @@ running_processes = {}  # Dictionary to store running processes (filename: proce
 
 
 # --- Helper Functions ---
-
-def is_admin(user_id):
-    """Checks if a user is an admin."""
-    return user_id in ADMIN_IDS
 
 def format_file_size(size_bytes):
     """Formats file size in a human-readable format."""
@@ -110,9 +103,6 @@ def run_python_script(filename, chat_id):
     except Exception as e:
         bot.send_message(chat_id, f"❌ An error occurred while running `{filename}`: `{str(e)}`", parse_mode="Markdown")
         logging.exception(f"Error running script {filename}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error running script `{filename}` in chat {chat_id}:\n`{str(e)}`", parse_mode="Markdown")
 
 
 def install_package(package_name, chat_id):
@@ -128,27 +118,17 @@ def install_package(package_name, chat_id):
         else:
             bot.send_message(chat_id, f"❌ Error installing package `{package_name}`:\n`{process.stderr}`", parse_mode="Markdown")
             logging.error(f"Error installing package {package_name}: {process.stderr}")
-            # Notify Admin about Error
-            for admin_id in ADMIN_IDS:
-                bot.send_message(admin_id, f"🚨 Error installing package `{package_name}` in chat {chat_id}:\n`{process.stderr}`", parse_mode="Markdown")
 
     except Exception as e:
         bot.send_message(chat_id, f"❌ An error occurred while installing `{package_name}`: `{str(e)}`", parse_mode="Markdown")
         logging.exception(f"Error installing package {package_name}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error installing package `{package_name}` in chat {chat_id}:\n`{str(e)}`", parse_mode="Markdown")
+
 
 # --- Command Handlers ---
 
 @bot.message_handler(commands=['start'])
 def start(message):
     """Handles the /start command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     item1 = telebot.types.KeyboardButton("📁 List Files")
     item2 = telebot.types.KeyboardButton("⚙️ Manage Files")
@@ -165,7 +145,6 @@ def start(message):
                      "/install [package] - Install a Python package\n"
                      "/help - Show available commands\n"
                      "/manage -  Manage your uploaded files\n"
-                     "/logs - Get the bot logs (Admin only)\n" # ADDED: Logs command
                      "Just send me a Python file to upload it! 📤",
                      reply_markup=markup)
     logging.info(f"User {message.from_user.id} started the bot.")
@@ -174,11 +153,6 @@ def start(message):
 @bot.message_handler(commands=['help'])
 def help(message):
     """Handles the /help command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     help_text = """
 Here are the available commands:
 
@@ -188,7 +162,6 @@ Here are the available commands:
 /install [package] - Install a Python package using pip (e.g., `/install requests`).
 /help - Show this help message.
 /manage - Manage your uploaded files(Delete ,Show Size).
-/logs - Get the bot logs (Admin only). # ADDED: Logs command
 
 You can also upload Python files directly by sending them to the bot. 📤
 """
@@ -198,11 +171,6 @@ You can also upload Python files directly by sending them to the bot. 📤
 @bot.message_handler(commands=['manage'])
 def manage_files(message):
     """Handles the /manage command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     item1 = telebot.types.KeyboardButton("🗑️ Delete File")
     item2 = telebot.types.KeyboardButton("📊 Show File Size")
@@ -215,11 +183,6 @@ def manage_files(message):
 @bot.message_handler(func=lambda message: message.text == "🗑️ Delete File")
 def delete_file_selection(message):
     """Handles the "Delete File" option."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     files = get_file_list()
     if not files:
         bot.send_message(message.chat.id, "No files to delete.")
@@ -234,11 +197,6 @@ def delete_file_selection(message):
 @bot.message_handler(func=lambda message: message.text.startswith("Delete: "))
 def delete_file(message):
     """Deletes the selected file."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     filename = message.text[len("Delete: "):]
     filepath = os.path.join(UPLOAD_FOLDER, filename)
 
@@ -250,10 +208,6 @@ def delete_file(message):
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ Error deleting file `{filename}`: `{str(e)}`", parse_mode="Markdown", reply_markup=get_main_menu_markup())
             logging.error(f"Error deleting file {filename} by user {message.from_user.id}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error deleting file `{filename}` in chat {message.chat.id}:\n`{str(e)}`", parse_mode="Markdown")
-
     else:
         bot.send_message(message.chat.id, f"❌ File `{filename}` not found.", parse_mode="Markdown", reply_markup=get_main_menu_markup())
 
@@ -261,11 +215,6 @@ def delete_file(message):
 @bot.message_handler(func=lambda message: message.text == "📊 Show File Size")
 def show_file_size_selection(message):
     """Handles the "Show File Size" option."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     files = get_file_list()
     if not files:
         bot.send_message(message.chat.id, "No files uploaded yet.")
@@ -280,11 +229,6 @@ def show_file_size_selection(message):
 @bot.message_handler(func=lambda message: message.text.startswith("Size: "))
 def show_file_size(message):
     """Shows the size of the selected file."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     filename = message.text[len("Size: "):]
     filepath = os.path.join(UPLOAD_FOLDER, filename)
 
@@ -299,11 +243,6 @@ def show_file_size(message):
 @bot.message_handler(commands=['list'])
 def list_files(message):
     """Handles the /list command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     files = get_file_list()
 
     if not files:
@@ -322,10 +261,6 @@ def list_files(message):
 @bot.message_handler(commands=['run'])
 def run_script_command(message):
     """Handles the /run command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
     try:
         filename = message.text.split(' ', 1)[1].strip()
         if not filename.endswith(".py"):
@@ -338,18 +273,11 @@ def run_script_command(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ An unexpected error occurred: `{str(e)}`", parse_mode="Markdown")
         logging.exception(f"Error in /run command by user {message.from_user.id}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error running script from command by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
+
 
 @bot.message_handler(commands=['install'])
 def install_package_command(message):
     """Handles the /install command."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     try:
         package_name = message.text.split(' ', 1)[1].strip()
         install_package(package_name, message.chat.id)
@@ -358,19 +286,11 @@ def install_package_command(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ An unexpected error occurred: `{str(e)}`", parse_mode="Markdown")
         logging.exception(f"Error in /install command by user {message.from_user.id}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error installing package from command by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
 
 
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     """Handles document uploads (specifically Python files)."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     try:
         if message.document.file_name.endswith('.py'):
             file_info = bot.get_file(message.document.file_id)
@@ -389,9 +309,6 @@ def handle_document(message):
     except Exception as e:
         bot.send_message(message.chat.id, f"❌ An error occurred during file upload: `{str(e)}`", parse_mode="Markdown")
         logging.exception(f"Error handling document upload by user {message.from_user.id}: {e}")
-        # Notify Admin about Error
-        for admin_id in ADMIN_IDS:
-            bot.send_message(admin_id, f"🚨 Error handling document upload by user {message.from_user.id}:\n`{str(e)}`", parse_mode="Markdown")
 
 
 # --- Button Handlers (Refactored) ---
@@ -410,40 +327,20 @@ def get_main_menu_markup():
 @bot.message_handler(func=lambda message: message.text == "Back to Main Menu" or message.text == "Cancel")
 def back_to_main_menu(message):
     """Handles the "Back to Main Menu" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     bot.send_message(message.chat.id, "Returning to main menu.", reply_markup=get_main_menu_markup())
 
 @bot.message_handler(func=lambda message: message.text == "📁 List Files")
 def list_files_button(message):
     """Handles the "List Files" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     list_files(message)  # Call the existing list_files function
 
 @bot.message_handler(func=lambda message: message.text == "⚙️ Manage Files")
 def manage_files_button(message):
     """Handles the "Manage Files" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     manage_files(message)  # Call the existing manage_files function
 
 def run_script(message, filename):
     """Runs a script (either from button or command)."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     if not os.path.exists(filepath):
         bot.send_message(message.chat.id, f"❌ File `{filename}` not found.", parse_mode="Markdown")
@@ -460,11 +357,6 @@ def run_script(message, filename):
 @bot.message_handler(func=lambda message: message.text == "🚀 Run Script")
 def run_script_button(message):
     """Handles the "Run Script" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     files = get_file_list()
     if not files:
         bot.send_message(message.chat.id, "No files to run. Upload a Python file first!")
@@ -479,32 +371,17 @@ def run_script_button(message):
 @bot.message_handler(func=lambda message: message.text.endswith(".py"))
 def handle_script_selection(message):
     """Handles the selection of a script from the Run Script menu."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     filename = message.text
     run_script(message, filename)  # Call the common run_script function
 
 @bot.message_handler(func=lambda message: message.text == "📦 Install Package")
 def install_package_button(message):
     """Handles the "Install Package" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     bot.send_message(message.chat.id, "Please enter the package name to install (e.g., `requests`):", reply_markup=telebot.types.ReplyKeyboardRemove())
     bot.register_next_step_handler(message, process_package_name)
 
 def process_package_name(message):
     """Gets the package name from the user and installs it."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     package_name = message.text.strip()
     if package_name:
         install_package(package_name, message.chat.id)
@@ -514,39 +391,15 @@ def process_package_name(message):
 @bot.message_handler(func=lambda message: message.text == "ℹ️ Help")
 def help_button(message):
     """Handles the "Help" button."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, you are not authorized to use this bot.")
-        return
-
     help(message)  # Call the existing help function
 
-@bot.message_handler(commands=['logs'])
-def send_logs(message):
-    """Handles the /logs command (Admin only)."""
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "Sorry, this command is only for admins.")
-        return
-
-    try:
-        with open(LOG_FILE, 'r') as f:
-            log_content = f.read()
-        bot.send_message(user_id, f"Bot Logs:\n\n{log_content}\n", parse_mode="Markdown")
-    logging.info(f"Admin {user_id} requested logs.")
-  except FileNotFoundError:
-    bot.send_message(user_id, "Log file not found.")
-    logging.warning(f"Admin {user_id} requested logs, but the file was not found.")
-  except Exception as e:
-    bot.send_message(user_id, f"An error occurred while sending logs: {str(e)}", parse_mode="Markdown")
-    logging.exception(f"Error sending logs to admin {user_id}: {e}")
 
 # --- Main Loop ---
 if __name__ == '__main__':
-  try:
-    logging.info("Bot started.")
-    bot.infinity_polling() # Use infinity_polling for better reconnection handling
-  except Exception as e:
-    logging.exception(f"Bot stopped due to an error: {e}")
-  finally:
-    logging.info("Bot stopped.")
+    try:
+        logging.info("Bot started.")
+        bot.infinity_polling()  # Use infinity_polling for better reconnection handling
+    except Exception as e:
+        logging.exception(f"Bot stopped due to an error: {e}")
+    finally:
+        logging.info("Bot stopped.")
