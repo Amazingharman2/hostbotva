@@ -7,21 +7,7 @@ import shutil
 from telebot import types
 from flask import Flask
 
-@app.route("/")
-def index():
-    return "Bot Web Server is running"
 
-@app.route("/health")
-def health():
-    return jsonify({"status": "ok"})
-
-# Run Flask in a daemon thread so it won't block program exit
-thread = threading.Thread(
-    target=lambda: app.run(host="0.0.0.0", port=port, debug=False, use_reloader=False, threaded=True),
-    daemon=True
-)
-thread.start()
-return thread
 
 
 # Bot token (replace with your bot token)
