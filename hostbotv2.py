@@ -5,13 +5,11 @@ import subprocess
 import time
 import shutil
 from telebot import types
-from flask import Flask
-
-
-
+from flask import Flask, request
+import logging
 
 # Bot token (replace with your bot token)
-BOT_TOKEN = "8345947714:AAGpUuJkkqn3l7FJLxYqtjjrTZ03_ubUe8I"  # Replace with your actual bot token
+BOT_TOKEN = "8345947714:AAGpUuJkkqn3l7FJLxYqtjjrTZ03_ubUe8I"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -20,6 +18,12 @@ if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
 
 active_processes = {}  # Keep track of running processes
+
+# Flask App for Webhook
+app = Flask(__name__)
+
+# Enable logging
+logging.basicConfig(level=logging.INFO)
 
 
 def create_keyboard():
@@ -30,10 +34,10 @@ def create_keyboard():
         types.KeyboardButton('▶️ Run File'),
         types.KeyboardButton('🗑️ Delete File'),
         types.KeyboardButton('🚫 Stop File'),
-        types.KeyboardButton('⚙️ Install Package')
     )
     keyboard.add(
         types.KeyboardButton('❌ Delete All Files'),
+        types.KeyboardButton('📦 Install Package'),
         types.KeyboardButton('🏓 Ping Check'),
     )
     return keyboard
@@ -185,6 +189,29 @@ def delete_all_files(message):
         bot.reply_to(message, f"Error deleting all files: {e} 😥")
 
 
+@bot.message_handler(func=lambda message: message.text == "📦 Install Package")
+def handle_install_package(message):
+    bot.reply_to(message, "Please enter the package name to install (e.g., requests):")
+    bot.register_next_step_handler(message, process_package_installation)
+
+
+def process_package_installation(message):
+    package_name = message.text.strip()
+    try:
+        bot.reply_to(message, f"Installing package '{package_name}'... 📦")
+        process = subprocess.Popen(['pip', 'install', package_name], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+        stdout, stderr = process.communicate()
+        output = stdout.decode('utf-8')
+        error = stderr.decode('utf-8')
+        response = f"Installation Output:\n{output}\n"
+        if error:
+            response += f"Error:\n{error}"
+        bot.send_message(message.chat.id, response)
+    except Exception as e:
+        bot.reply_to(message, f"Error installing package: {e} 😥")
+
+
 @bot.message_handler(func=lambda message: message.text == "🏓 Ping Check")
 def ping_check(message):
     try:
@@ -193,38 +220,35 @@ def ping_check(message):
         output = stdout.decode('utf-8')
         bot.reply_to(message, f"Internet Speed:\n{output} 🏓")
     except FileNotFoundError:
-        bot.reply_to(message, "Speedtest-cli is not installed. Please install it first.")
+        bot.reply_to(message, "speedtest-cli not found. Please install it first (pip install speedtest-cli). 😥")
     except Exception as e:
         bot.reply_to(message, f"Error checking ping: {e} 😥")
 
 
-@bot.message_handler(func=lambda message: message.text == "⚙️ Install Package")
-def handle_install_package(message):
-    bot.reply_to(message, "Please send the name of the package you want to install (e.g., 'requests').")
-    bot.register_next_step_handler(message, install_package)
+# Webhook route
+@app.route('/', methods=['POST'])
+def webhook():
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return "!", 200
 
 
-def install_package(message):
-    package_name = message.text.strip()
-    bot.reply_to(message, f"Installing package '{package_name}'. Please wait...")
-    try:
-        process = subprocess.Popen(['pip', 'install', package_name], stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        output = stdout.decode('utf-8')
-        error = stderr.decode('utf-8')
+@app.route('/set_webhook', methods=['GET', 'POST'])
+def set_webhook():
+    webhook_url = 'https://hostbotvav12.onrender.com'  # Replace with your Render app URL
+    bot.set_webhook(url=webhook_url)
+    return "Webhook set!", 200
 
-        response = f"Installation Output:\n{output}\n"
-        if error:
-            response += f"Error:\n{error}"
 
-        bot.send_message(message.chat.id, response)
-        bot.send_message(message.chat.id, f"Package '{package_name}' installed (or attempted to install).")
-
-    except Exception as e:
-        bot.reply_to(message, f"Error installing package: {e} 😥")
-
+@app.route('/unset_webhook', methods=['GET', 'POST'])
+def unset_webhook():
+    bot.delete_webhook()
+    return "Webhook unset!", 200
 
 if __name__ == '__main__':
-    print("Bot started...")
-    bot.polling(none_stop=True)
+    # Start Flask app
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+    #  Remove bot.polling
+    # print("Bot started...")
+    # bot.polling(none_stop=True)
