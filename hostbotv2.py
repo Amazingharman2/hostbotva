@@ -9,7 +9,7 @@ from flask import Flask, request
 import logging
 
 # Bot token (replace with your bot token)
-BOT_TOKEN = "8345947714:AAGpUuJkkqn3l7FJLxYqtjjrTZ03_ubUe8I"
+BOT_TOKEN = "8345947714:AAGkKn1UC_9yN1e8lVAgsnX4OzvPzs2_szw"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
